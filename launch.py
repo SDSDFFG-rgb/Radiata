@@ -147,7 +147,11 @@ def prepare_environment():
 
     torch_command = os.environ.get(
         "TORCH_COMMAND",
-        "pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118",
+        "pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117",
+    )
+    xformers_command = os.environ.get(
+        "XFORMERS_COMMAND",
+        "pip install xformers==0.0.16",
     )
 
     sys.argv, skip_install = extract_arg(sys.argv, "--skip-install")
@@ -159,12 +163,6 @@ def prepare_environment():
     tensorrt = "--tensorrt" in sys.argv
 
     if reinstall_torch or not is_installed("torch") or not is_installed("torchvision"):
-        if reinstall_torch:
-            run(
-                f'"{python}" -m pip uninstall torch torchvision -y',
-                "Uninstalling torch and torchvision",
-                "Couldn't uninstall torch",
-            )
         run(
             f'"{python}" -m {torch_command}',
             "Installing torch and torchvision",
@@ -172,7 +170,11 @@ def prepare_environment():
         )
 
     if reinstall_xformers or not is_installed("xformers"):
-        run_pip("install xformers", "xformers")
+        run(
+            f'"{python}" -m {xformers_command}',
+            "Installing xformers",
+            "Couldn't install xformers",
+        )
 
     run(
         f'"{python}" -m pip install -r requirements/base.txt',
