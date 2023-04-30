@@ -23,7 +23,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--config-file", type=str, default="config.toml")
 
 parser.add_argument("--host", type=str, default="")
-parser.add_argument("--port", type=int, default=7860)
+parser.add_argument("--port", type=int, default=7442)
 parser.add_argument("--share", action="store_true")
 
 parser.add_argument("--model-dir", type=str, default="models")
