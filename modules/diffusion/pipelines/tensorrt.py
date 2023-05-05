@@ -1,3 +1,4 @@
+import gc
 import os
 from typing import *
 from typing import Optional
@@ -10,11 +11,15 @@ from PIL import Image
 from polygraphy import cuda
 from transformers import CLIPTokenizer
 
-from lib.tensorrt.engine import (AutoencoderKLEngine, CLIPTextModelEngine,
-                                 UNet2DConditionModelEngine)
+from lib.tensorrt.engine import (
+    AutoencoderKLEngine,
+    CLIPTextModelEngine,
+    UNet2DConditionModelEngine,
+)
 from lib.tensorrt.models import BaseModel
 from lib.tensorrt.utilities import TRT_LOGGER, create_models
 
+from ..utils import convert_checkpoint_to_pipe
 from .diffusers import DiffusersPipeline
 
 
@@ -39,6 +44,33 @@ class TensorRTStableDiffusionPipeline(DiffusersPipeline):
             hf_cache_dir=hf_cache_dir,
         )
 
+        temporary_pipe = convert_checkpoint_to_pipe(model_id)
+
+        tokenizer = (
+            CLIPTokenizer.from_pretrained(
+                model_id,
+                subfolder="tokenizer",
+                use_auth_token=use_auth_token,
+                cache_dir=hf_cache_dir,
+            )
+            if temporary_pipe is None
+            else temporary_pipe.tokenizer
+        )
+        scheduler = (
+            DDPMScheduler.from_pretrained(
+                model_id,
+                subfolder="scheduler",
+                use_auth_token=use_auth_token,
+                cache_dir=hf_cache_dir,
+            )
+            if temporary_pipe is None
+            else temporary_pipe.scheduler
+        )
+
+        del temporary_pipe
+        gc.collect()
+        torch.cuda.empty_cache()
+
         def model_path(model_name):
             return os.path.join(engine_dir, model_name + ".plan")
 
@@ -56,18 +88,8 @@ class TensorRTStableDiffusionPipeline(DiffusersPipeline):
             unet=unet,
             text_encoder=clip,
             vae=vae,
-            tokenizer=CLIPTokenizer.from_pretrained(
-                model_id,
-                subfolder="tokenizer",
-                use_auth_token=use_auth_token,
-                cache_dir=hf_cache_dir,
-            ),
-            scheduler=DDPMScheduler.from_pretrained(
-                model_id,
-                subfolder="scheduler",
-                use_auth_token=use_auth_token,
-                cache_dir=hf_cache_dir,
-            ),
+            tokenizer=tokenizer,
+            scheduler=scheduler,
         ).to(device)
         return pipe
 
