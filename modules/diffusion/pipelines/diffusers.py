@@ -105,7 +105,7 @@ class DiffusersPipeline:
         tokenizer: CLIPTokenizer,
         unet: UNet2DConditionModel,
         scheduler: DDPMScheduler,
-        device: torch.device,
+        device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ):
         self.vae = vae
@@ -127,15 +127,22 @@ class DiffusersPipeline:
             device = self.device
         if dtype is None:
             dtype = self.dtype
-        self.vae.to(device, dtype)
-        self.text_encoder.to(device, dtype)
-        self.unet.to(device, dtype)
-        self.tokenizer
-        self.scheduler
+
+        models = [
+            self.vae,
+            self.text_encoder,
+            self.unet,
+        ]
+        for model in models:
+            if hasattr(model, "to"):
+                model.to(device, dtype)
+
         if device is not None:
             self.device = device
+            self.lpw.device = device
         if dtype is not None:
             self.dtype = dtype
+
         return self
 
     def enterers(self):
