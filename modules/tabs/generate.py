@@ -1,11 +1,11 @@
+import time
 from typing import *
 
 import gradio as gr
 
 from api.models.diffusion import ImageGenerationOptions
 from modules import model_manager
-from modules.components import image_generation_options
-from modules.components import gallery
+from modules.components import gallery, image_generation_options
 from modules.ui import Tab
 
 
@@ -24,11 +24,12 @@ def generate_fn(fn):
             width,
             height,
             hiresfix,
+            multidiffusion,
             hiresfix_mode,
             hiresfix_scale,
             init_image,
             strength,
-        ) = as_list[0:15]
+        ) = as_list[0:16]
 
         plugin_values = dict(list(data.items())[15:])
 
@@ -48,6 +49,7 @@ def generate_fn(fn):
             hiresfix=hiresfix,
             hiresfix_mode=hiresfix_mode,
             hiresfix_scale=hiresfix_scale,
+            multidiffusion=multidiffusion,
         )
         yield from fn(self, opts, plugin_values)
 
@@ -92,6 +94,8 @@ class Generate(Tab):
         else:
             inference_steps = opts.num_inference_steps
 
+        start = time.perf_counter()
+
         for data in model_manager.sd_model(opts, plugin_data):
             if type(data) == tuple:
                 step, preview = data
@@ -111,19 +115,20 @@ class Generate(Tab):
             else:
                 image = data
 
+        end = time.perf_counter()
+
         results = []
         for images, opts in image:
             results.extend(images)
 
-        yield results, "Finished", gr.Button.update(
+        yield results, f"Finished in {end - start:0.4f} seconds", gr.Button.update(
             value="Generate", variant="primary", interactive=True
         )
 
     def ui(self, outlet):
         with gr.Column():
             with gr.Row():
-                with gr.Column(scale=3):
-                    prompts = image_generation_options.prompt_ui()
+                prompts = image_generation_options.prompt_ui()
                 generate_button = image_generation_options.button_ui()
 
             with gr.Row():

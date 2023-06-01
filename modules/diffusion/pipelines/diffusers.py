@@ -1,6 +1,7 @@
 import gc
 import inspect
 import os
+from dataclasses import dataclass
 from typing import *
 
 import numpy as np
@@ -17,33 +18,26 @@ from diffusers.pipelines.stable_diffusion import (
     convert_from_ckpt,
 )
 from diffusers.utils import PIL_INTERPOLATION, numpy_to_pil, randn_tensor
+from safetensors.torch import load_file
 from tqdm import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
+from api.diffusion.pipelines.diffusers import DiffusersPipelineModel
 from api.events.generation import LoadResourceEvent, UNetDenoisingEvent
 from api.models.diffusion import ImageGenerationOptions
 from modules.diffusion.pipelines.lpw import LongPromptWeightingPipeline
+from modules.diffusion.upscalers.multidiffusion import Multidiffusion
 from modules.shared import ROOT_DIR
 
 
-class DiffusersPipeline:
-    __mode__ = "diffusers"
+@dataclass
+class PipeSession:
+    plugin_data: Dict[str, Any]
+    opts: ImageGenerationOptions
 
-    @classmethod
-    def load_unet(cls, model_id: str):
-        ckpt_path = os.path.join(ROOT_DIR, "models", "checkpoints", model_id)
-        if os.path.exists(ckpt_path):
-            temporary_pipe = (
-                convert_from_ckpt.download_from_original_stable_diffusion_ckpt(
-                    ckpt_path,
-                    from_safetensors=model_id.endswith(".safetensors"),
-                    load_safety_checker=False,
-                )
-            )
-            unet = temporary_pipe.unet
-        else:
-            unet = UNet2DConditionModel.from_pretrained(model_id, subfolder="unet")
-        return unet
+
+class DiffusersPipeline(DiffusersPipelineModel):
+    __mode__ = "diffusers"
 
     @classmethod
     def from_pretrained(
@@ -59,14 +53,12 @@ class DiffusersPipeline:
             ROOT_DIR, "models", "checkpoints", pretrained_model_id
         )
         if os.path.exists(checkpooint_path):
-            temporary_pipe = (
-                convert_from_ckpt.download_from_original_stable_diffusion_ckpt(
-                    checkpooint_path,
-                    from_safetensors=pretrained_model_id.endswith(".safetensors"),
-                    load_safety_checker=False,
-                    device=device,
-                ).to(torch_dtype=torch_dtype)
-            )
+            temporary_pipe = StableDiffusionPipeline.from_ckpt(
+                checkpooint_path,
+                from_safetensors=pretrained_model_id.endswith(".safetensors"),
+                load_safety_checker=False,
+                device=device,
+            ).to(torch_dtype=torch_dtype)
         else:
             temporary_pipe = StableDiffusionPipeline.from_pretrained(
                 pretrained_model_id,
@@ -88,6 +80,7 @@ class DiffusersPipeline:
         torch.cuda.empty_cache()
 
         pipe = cls(
+            id=pretrained_model_id,
             vae=vae,
             text_encoder=text_encoder,
             tokenizer=tokenizer,
@@ -100,6 +93,7 @@ class DiffusersPipeline:
 
     def __init__(
         self,
+        id: str,
         vae: AutoencoderKL,
         text_encoder: CLIPTextModel,
         tokenizer: CLIPTokenizer,
@@ -108,6 +102,7 @@ class DiffusersPipeline:
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ):
+        self.id = id
         self.vae = vae
         self.text_encoder = text_encoder
         self.tokenizer = tokenizer
@@ -118,10 +113,10 @@ class DiffusersPipeline:
         self.dtype = dtype
 
         self.lpw = LongPromptWeightingPipeline(self)
+        self.multidiff = None
 
-        self.plugin_data = None
-        self.opts = None
         self.stage_1st = None
+        self.session = None
 
     def to(self, device: torch.device = None, dtype: torch.dtype = None):
         if device is None:
@@ -149,15 +144,51 @@ class DiffusersPipeline:
     def enterers(self):
         return []
 
+    def swap_vae(self, vae: Optional[str] = None):
+        if vae is None:
+            checkpoint_path = os.path.join(ROOT_DIR, "models", "checkpoints", self.id)
+            if os.path.exists(checkpoint_path):
+                temporary_pipe = StableDiffusionPipeline.from_ckpt(
+                    checkpoint_path,
+                    from_safetensors=self.id.endswith(".safetensors"),
+                    load_safety_checker=False,
+                    device=self.device,
+                )
+                self.vae = temporary_pipe.vae
+                del temporary_pipe
+            else:
+                self.vae = AutoencoderKL.from_pretrained(
+                    self.id, subfolder="vae", device=self.device
+                )
+            self.vae.to(self.device, self.dtype)
+            return
+        if vae.endswith(".safetensors"):
+            state_dict = load_file(vae, device=self.device)
+        else:
+            state_dict = torch.load(vae, map_location=self.device)
+        state_dict = state_dict["state_dict"]
+
+        new_state_dict = {}
+
+        for key, value in state_dict.items():
+            if not key.startswith("first_stage_model."):
+                key = "first_stage_model." + key
+            new_state_dict[key] = value
+
+        state_dict = convert_from_ckpt.convert_ldm_vae_checkpoint(
+            new_state_dict, self.vae.config
+        )
+        self.vae = AutoencoderKL.from_config(self.vae.config)
+        self.vae.load_state_dict(state_dict)
+        self.vae.to(self.device, self.dtype)
+
     def load_resources(
         self,
-        image_height: int,
-        image_width: int,
-        batch_size: int,
-        num_inference_steps: int,
+        opts: ImageGenerationOptions,
     ):
+        num_inference_steps = opts.num_inference_steps
         self.scheduler.set_timesteps(num_inference_steps, device=self.device)
-        LoadResourceEvent.call_event(LoadResourceEvent(pipe=self))
+        LoadResourceEvent.call_event(self)
 
     def get_timesteps(self, num_inference_steps: int, strength: Optional[float]):
         if strength is None:
@@ -222,7 +253,7 @@ class DiffusersPipeline:
         dtype: torch.dtype,
         generator: torch.Generator,
         latents: torch.Tensor = None,
-    ) -> torch.Tensor:
+    ):
         if image is None:
             shape = (
                 batch_size,
@@ -280,21 +311,20 @@ class DiffusersPipeline:
                     latent_model_input, timestep
                 )
 
-                event = UNetDenoisingEvent(
-                    pipe=self,
-                    latent_model_input=latent_model_input,
-                    timestep=timestep,
-                    step=step,
-                    latents=latents,
-                    timesteps=timesteps,
-                    do_classifier_free_guidance=do_classifier_free_guidance,
-                    prompt_embeds=prompt_embeds,
-                    extra_step_kwargs=extra_step_kwargs,
-                    callback=callback,
-                    callback_steps=callback_steps,
-                    cross_attention_kwargs=cross_attention_kwargs,
+                event = UNetDenoisingEvent.call_event(
+                    self,
+                    latent_model_input,
+                    step,
+                    timestep,
+                    latents,
+                    timesteps,
+                    do_classifier_free_guidance,
+                    prompt_embeds,
+                    extra_step_kwargs,
+                    callback,
+                    callback_steps,
+                    cross_attention_kwargs,
                 )
-                UNetDenoisingEvent.call_event(event)
 
                 latents = event.latents
 
@@ -382,8 +412,10 @@ class DiffusersPipeline:
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         plugin_data: Optional[Dict[str, Any]] = {},
     ):
-        self.plugin_data = plugin_data
-        self.opts = opts
+        self.session = PipeSession(
+            plugin_data=plugin_data,
+            opts=opts,
+        )
 
         # Hires.fix
         if opts.hiresfix:
@@ -424,12 +456,7 @@ class DiffusersPipeline:
         do_classifier_free_guidance = opts.guidance_scale > 1.0
 
         # 2. Prepare pipeline resources
-        self.load_resources(
-            image_height=opts.height,
-            image_width=opts.width,
-            batch_size=opts.batch_size,
-            num_inference_steps=opts.num_inference_steps,
-        )
+        self.load_resources(opts=opts)
 
         # 3. Prepare timesteps
         timesteps, opts.num_inference_steps = self.get_timesteps(
@@ -474,18 +501,37 @@ class DiffusersPipeline:
         torch.cuda.synchronize()
 
         # 7. Denoising loop
-        latents = self.denoise_latent(
-            latents=latents,
-            timesteps=timesteps,
-            num_inference_steps=opts.num_inference_steps,
-            guidance_scale=opts.guidance_scale,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-            prompt_embeds=prompt_embeds,
-            extra_step_kwargs=extra_step_kwargs,
-            callback=callback,
-            callback_steps=callback_steps,
-            cross_attention_kwargs=cross_attention_kwargs,
-        )
+        if opts.multidiffusion:
+            # multidiff denoise
+            self.multidiff = Multidiffusion(self)
+            views = self.multidiff.get_views(opts.height, opts.width)
+            latents = self.multidiff.views_denoise_latent(
+                views=views,
+                latents=latents,
+                timesteps=timesteps,
+                num_inference_steps=opts.num_inference_steps,
+                guidance_scale=opts.guidance_scale,
+                do_classifier_free_guidance=do_classifier_free_guidance,
+                prompt_embeds=prompt_embeds,
+                extra_step_kwargs=extra_step_kwargs,
+                callback=callback,
+                callback_steps=callback_steps,
+                cross_attention_kwargs=cross_attention_kwargs,
+            )
+            self.multidiff = None
+        else:
+            latents = self.denoise_latent(
+                latents=latents,
+                timesteps=timesteps,
+                num_inference_steps=opts.num_inference_steps,
+                guidance_scale=opts.guidance_scale,
+                do_classifier_free_guidance=do_classifier_free_guidance,
+                prompt_embeds=prompt_embeds,
+                extra_step_kwargs=extra_step_kwargs,
+                callback=callback,
+                callback_steps=callback_steps,
+                cross_attention_kwargs=cross_attention_kwargs,
+            )
 
         torch.cuda.synchronize()
 
@@ -498,8 +544,7 @@ class DiffusersPipeline:
             self.stage_1st = None
             return outputs
 
-        self.plugin_data = None
-        self.opts = None
+        self.session = None
 
         return outputs
 

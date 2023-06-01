@@ -11,12 +11,14 @@ def prompt_ui():
             lines=3,
             placeholder="Prompt",
             show_label=False,
+            elem_classes=["prompt-textbox"],
         )
         negative_prompt_textbox = gr.TextArea(
             "",
             lines=3,
             placeholder="Negative Prompt",
             show_label=False,
+            elem_classes=["negative-prompt-textbox"],
         )
     return prompt_textbox, negative_prompt_textbox
 
@@ -90,8 +92,10 @@ def common_options_ui():
 
 def hires_options_ui():
     with gr.Row():
-        with gr.Accordion("Hires.fix", open=False):
-            enable_upscale = gr.Checkbox(label="Hires.fix")
+        with gr.Accordion("Upscaler", open=False):
+            with gr.Row():
+                enable_hires = gr.Checkbox(label="Hires.fix")
+                enable_multidiff = gr.Checkbox(label="Multi-Diffusion")
             with gr.Row():
                 upscaler_mode = gr.Dropdown(
                     choices=[
@@ -108,7 +112,7 @@ def hires_options_ui():
                 scale_slider = gr.Slider(
                     value=1.5, minimum=1, maximum=4, step=0.05, label="Upscale by"
                 )
-    return enable_upscale, upscaler_mode, scale_slider
+    return enable_hires, enable_multidiff, upscaler_mode, scale_slider
 
 
 def img2img_options_ui():
@@ -126,7 +130,7 @@ def plugin_options_ui():
 
     with gr.Column():
         for name, data in plugin_loader.plugin_store.items():
-            if "ui" not in data and data["ui"] is not None:
+            if "ui" not in data or data["ui"] is None:
                 continue
             with gr.Accordion(name, open=False):
                 plugin_values[name] = data["ui"]()

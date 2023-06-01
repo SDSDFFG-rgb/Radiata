@@ -11,6 +11,7 @@ from PIL import Image
 from polygraphy import cuda
 from transformers import CLIPTextModel, CLIPTokenizer
 
+from api.models.diffusion import ImageGenerationOptions
 from lib.tensorrt.engine import (
     AutoencoderKLEngine,
     CLIPTextModelEngine,
@@ -96,7 +97,6 @@ class TensorRTStableDiffusionPipeline(DiffusersPipeline):
             use_auth_token=use_auth_token,
             device=device,
             max_batch_size=max_batch_size,
-            hf_cache_dir=hf_cache_dir,
             embedding_dim=embedding_dim,
         )
 
@@ -106,6 +106,7 @@ class TensorRTStableDiffusionPipeline(DiffusersPipeline):
         stream = cuda.Stream()
         unet = UNet2DConditionModelEngine(model_path("unet"), stream)
         pipe = cls(
+            id=model_id,
             models=models,
             stream=stream,
             unet=unet,
@@ -119,6 +120,7 @@ class TensorRTStableDiffusionPipeline(DiffusersPipeline):
 
     def __init__(
         self,
+        id: str,
         models: Dict[str, BaseModel],
         stream: cuda.Stream,
         vae: AutoencoderKLEngine,
@@ -133,6 +135,7 @@ class TensorRTStableDiffusionPipeline(DiffusersPipeline):
         self.text_encoder: Optional[CLIPTextModelEngine] = None
         self.scheduler: Optional[DDPMScheduler] = None
         super().__init__(
+            id,
             vae,
             text_encoder,
             tokenizer,
@@ -152,14 +155,13 @@ class TensorRTStableDiffusionPipeline(DiffusersPipeline):
 
     def load_resources(
         self,
-        image_height: int,
-        image_width: int,
-        batch_size: int,
-        num_inference_steps: int,
+        opts: ImageGenerationOptions,
     ):
-        super().load_resources(
-            image_height, image_width, batch_size, num_inference_steps
-        )
+        super().load_resources(opts)
+        image_height, image_width, batch_size = opts.height, opts.width, opts.batch_size
+        if opts.multidiffusion:
+            # TODO: adjustable tile H and W
+            image_height, image_width = 512, 512
         self.unet.allocate_buffers(
             shape_dict=self.trt_models["unet"].get_shape_dict(
                 batch_size, image_height, image_width

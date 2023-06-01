@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import *
 
+from fastapi import FastAPI
 from gradio import Blocks
 
 from . import BaseEvent
@@ -13,7 +14,7 @@ class PreAppLaunchEvent(BaseEvent):
 
 @dataclass
 class PostAppLaunchEvent(BaseEvent):
-    pass
+    app: FastAPI
 
 
 @dataclass

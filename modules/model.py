@@ -6,15 +6,20 @@ from queue import Queue
 from typing import *
 
 import torch
+from packaging.version import Version
 
 from api.models.diffusion import ImageGenerationOptions
 from lib.diffusers.scheduler import SCHEDULERS, parser_schedulers_config
 
 from . import config, utils
 from .images import save_image
-from .shared import hf_diffusers_cache_dir, get_device
+from .shared import get_device, hf_diffusers_cache_dir
 
 ModelMode = Literal["diffusers", "tensorrt"]
+PrecisionMap = {
+    "fp32": torch.float32,
+    "fp16": torch.float16,
+}
 
 
 class DiffusersModel:
@@ -53,10 +58,7 @@ class DiffusersModel:
             filepath = os.path.join(trt_path, *file.split("/"))
             if not os.path.exists(filepath):
                 return False
-        trt_module_status, trt_version_status = utils.tensorrt_is_available()
-        if not trt_module_status or not trt_version_status:
-            return False
-        return config.get("tensorrt")
+        return utils.tensorrt_is_available() and config.get("tensorrt")
 
     def trt_full_acceleration_available(self):
         trt_path = self.get_trt_path()
@@ -81,7 +83,9 @@ class DiffusersModel:
         if self.activated:
             return
         device = get_device()
-        torch_dtype = torch.float16 if config.get("fp16") else torch.float32
+
+        precision = config.get("precision") or "fp32"
+        torch_dtype = PrecisionMap[precision]
 
         if self.mode == "diffusers":
             from .diffusion.pipelines.diffusers import DiffusersPipeline
@@ -92,7 +96,10 @@ class DiffusersModel:
                 torch_dtype=torch_dtype,
                 cache_dir=hf_diffusers_cache_dir(),
             ).to(device=device)
-            self.pipe.enable_attention_slicing()
+
+            if Version(torch.__version__) < Version("2"):
+                self.pipe.enable_attention_slicing()
+
             if (
                 utils.is_installed("xformers")
                 and config.get("xformers")
