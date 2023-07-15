@@ -11,14 +11,14 @@ def prompt_ui():
             lines=3,
             placeholder="Prompt",
             show_label=False,
-            elem_classes=["prompt-textbox"],
+            elem_classes=["prompt-textbox", "danboorutag-autocomplete"],
         )
         negative_prompt_textbox = gr.TextArea(
             "",
             lines=3,
             placeholder="Negative Prompt",
             show_label=False,
-            elem_classes=["negative-prompt-textbox"],
+            elem_classes=["negative-prompt-textbox", "danboorutag-autocomplete"],
         )
     return prompt_textbox, negative_prompt_textbox
 
@@ -73,10 +73,10 @@ def common_options_ui():
         )
     with gr.Row():
         width_slider = gr.Slider(
-            value=512, minimum=64, maximum=2048, step=64, label="Width"
+            value=768, minimum=64, maximum=2048, step=64, label="Width"
         )
         height_slider = gr.Slider(
-            value=512, minimum=64, maximum=2048, step=64, label="Height"
+            value=768, minimum=64, maximum=2048, step=64, label="Height"
         )
     return (
         sampler_dropdown,

@@ -4,17 +4,17 @@ from typing import *
 
 from huggingface_hub import HfApi, ModelFilter
 
-from modules.logger import logger
+from modules.logger import set_logger
 from modules.shared import ROOT_DIR
 
 from . import config
 from .model import DiffusersModel
 
+logger = set_logger(__name__)
+
 sd_models: List[DiffusersModel] = []
 sd_model: Optional[DiffusersModel] = None
-mode: Literal["stable-diffusion", "deepfloyd_if"] = (
-    "deepfloyd_if" if config.get("deepfloyd_if") else "stable-diffusion"
-)
+mode: Literal["stable-diffusion"] = "stable-diffusion"
 
 
 def get_model(model_id: str):

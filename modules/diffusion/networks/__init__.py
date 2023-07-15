@@ -3,17 +3,17 @@ import re
 from glob import glob
 from typing import *
 
-import losalina.hypernetwork
 import torch
 
 from api.events import event_handler
 from api.events.generation import LoadResourceEvent
 from api.models.diffusion import ImageGenerationOptions
-from modules.logger import logger
+from modules.logger import set_logger
 from modules.shared import ROOT_DIR
 
-from . import lora, lyco
-from .hypernetwork import hijack_hypernetwork
+from . import lyco
+
+logger = set_logger(__name__)
 
 latest_networks: List[Tuple[str, torch.nn.Module]] = []
 
@@ -84,13 +84,10 @@ def load_network_modules(e: LoadResourceEvent):
         multiplier = float(multiplier)
         if module_type == "lora":
             filepath = find_network_filepath(basename, "lora")
-            network_module = lora
+            network_module = lyco
         elif module_type == "lyco":
             filepath = find_network_filepath(basename, "lycoris")
             network_module = lyco
-        elif module_type == "hypernet":
-            filepath = find_network_filepath(basename, "hypernetwork")
-            network_module = losalina.hypernetwork
         else:
             continue
 
@@ -121,4 +118,4 @@ def load_network_modules(e: LoadResourceEvent):
 
 
 def init():
-    hijack_hypernetwork()
+    pass

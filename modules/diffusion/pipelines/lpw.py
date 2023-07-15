@@ -4,7 +4,10 @@ from typing import *
 import torch
 
 from api.events.generation import PromptTokenizingEvent
-from modules.logger import logger
+from modules.logger import set_logger
+
+logger = set_logger(__name__)
+
 
 re_attention = re.compile(
     r"""
@@ -112,11 +115,13 @@ class LongPromptWeightingPipeline:
     def __init__(
         self,
         pipe,
+        text_encoder,
+        tokenizer,
     ):
         self.pipe = pipe
-        self.text_encoder = pipe.text_encoder
-        self.tokenizer = pipe.tokenizer
         self.device = pipe.device
+        self.text_encoder = text_encoder
+        self.tokenizer = tokenizer
 
     def get_unweighted_text_embeddings(
         self,
@@ -316,6 +321,4 @@ class LongPromptWeightingPipeline:
         )
         uncond_embeddings *= (previous_mean / current_mean).unsqueeze(-1).unsqueeze(-1)
 
-        text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
-
-        return text_embeddings
+        return text_embeddings, uncond_embeddings
